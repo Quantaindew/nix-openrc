@@ -1,0 +1,102 @@
+post_install() {
+  # Create nix group if it doesn't exist
+  if ! getent group nix > /dev/null; then
+    echo "Creating nix group..."
+    groupadd -r nix
+  else
+    echo "nix group already exists."
+  fi
+
+  # Create nixbld group if it doesn't exist
+  if ! getent group nixbld > /dev/null; then
+    echo "Creating nixbld group..."
+    groupadd -r nixbld
+  else
+    echo "nixbld group already exists."
+  fi
+
+  # Create nixbld01 to nixbld10 users if they don't exist
+  for n in $(seq -w 01 10); do
+    if ! id -u "nixbld$n" > /dev/null 2>&1; then
+      echo "Creating nixbld$n user..."
+      useradd -c "Nix build user $n" -d /var/empty -g nixbld -G nixbld -M -N -r -s /sbin/nologin "nixbld$n"
+    else
+      echo "nixbld$n user already exists."
+    fi
+  done
+
+  # Append allowed-users to nix.conf if not present
+  if ! grep -q "^allowed-users" /etc/nix/nix.conf; then
+    echo "allowed-users = @nix" >> /etc/nix/nix.conf
+    echo "Added 'allowed-users = @nix' to /etc/nix/nix.conf"
+  else
+    echo "'allowed-users' is already set in /etc/nix/nix.conf; please ensure it includes '@nix' if restricting access."
+  fi
+
+  # Enable nix-daemon service
+  if ! rc-update show default | grep -q nix-daemon; then
+    echo "Enabling nix-daemon service..."
+    rc-update add nix-daemon default
+  else
+    echo "nix-daemon service is already enabled."
+  fi
+
+  # Provide user instructions
+  cat << EOF
+Nix is installed with OpenRC support.
+To use Nix, add yourself to the 'nix' group:
+  sudo usermod -aG nix \$(whoami)
+Then, log out and log back in, or run 'newgrp nix'.
+Start the Nix daemon manually if needed:
+  rc-service nix-daemon start
+The daemon will start automatically on boot.
+For more information, see: https://nixos.org/nix/manual/
+EOF
+}
+
+post_remove() {
+  # Disable nix-daemon service if enabled
+  if rc-update show default | grep -q nix-daemon; then
+    echo "Disabling nix-daemon service..."
+    rc-update del nix-daemon default
+  fi
+
+  # Remove allowed-users line from nix.conf if it matches our setting
+  if grep -q "^allowed-users = @nix" /etc/nix/nix.conf; then
+    sed -i '/^allowed-users = @nix/d' /etc/nix/nix.conf
+    echo "Removed 'allowed-users = @nix' from /etc/nix/nix.conf"
+  fi
+
+  # Remove nixbld01 to nixbld10 users if they exist
+  for n in $(seq -w 01 10); do
+    if id -u "nixbld$n" > /dev/null 2>&1; then
+      echo "Removing nixbld$n user..."
+      userdel "nixbld$n"
+    fi
+  done
+
+  # Remove nixbld group if it exists and is empty
+  if getent group nixbld > /dev/null && ! getent passwd | grep -q ":nixbld:"; then
+    echo "Removing nixbld group..."
+    groupdel nixbld
+  fi
+
+  # Remove nix group if it exists and is empty
+  if getent group nix > /dev/null && ! getent passwd | grep -q ":nix:"; then
+    echo "Removing nix group..."
+    groupdel nix
+  fi
+
+  # Remove profile script if it exists
+  if [ -f /etc/profile.d/nix-remote.sh ]; then
+    echo "Removing /etc/profile.d/nix-remote.sh..."
+    rm /etc/profile.d/nix-remote.sh
+  fi
+
+  # Inform user about manual cleanup
+  cat << EOF
+Nix OpenRC support has been removed.
+The 'nix' package may still be installed; remove it with 'pacman -R nix' if desired.
+Manually delete /nix and /etc/nix directories if no longer needed.
+EOF
+}

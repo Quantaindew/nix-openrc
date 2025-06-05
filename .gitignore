@@ -1,0 +1,4 @@
+*codebase.md
+pkg
+*.tar.zst
+src/
